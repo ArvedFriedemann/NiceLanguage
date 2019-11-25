@@ -1,0 +1,22 @@
+Problem with equality:
+Technically, an equality constraint X = Y can be resolved by setting the
+pointers to the same location. However, this is problematic when things
+can go wrong during the replacement (e.g. during the merging it turns
+out some subterms aren't equal). This could be solved by checking the
+possibility first and only doing the merging when it is safe. The problem comes
+with concurrency. The safety check might be outdated at the time of the merge.
+
+
+Only formal proof is on completeness of the search and the building in of new
+knowledge from the prover. Therefore, the system is optimal and converges
+under minimal initial constant (or, no constant, to be exact)
+
+
+writing into pointer vs. keeping constraints: writing into pointers is fast, but bad for backtracking.
+keeping constraints is good for backtracking, but needs more memory.
+
+
+Why this works:
+Assume a knowledge base(KB) K of standard FOL Clauses. If one created a solving algorithm to reason over any KB using such a clause set, all clauses needed for search were contained in it, encoded as terms stating a transition relation between solving states. As there is reason to believe that there is no complete and optimal algorithm, this clause set will be incomplete. Imagine now an algorithm that checks K for knowledge on the next step, meaning it checks whether the current solving state, encoded as a term, matches a rule in K. If that is the case, the rule determines the next solving state. If not, the general search algorithm continues to operate with a complete (e.g. random) strategy.
+Inference of new rules on the solving process is achieved by first adding the past solving state transition back into K as an encoded term. Furthermore, additional rules state that a clause on the solving procedure only holds iff there is no other possibility that would have caused a quicker search. This prevents accidental slow rules from not being challenged. As testing out a clause on the solving procedure results in new clauses on solving, or, vice versa, solving other problems creates new clauses on how the solving works, this algorithm can be used as a solver that simultaneously solves problems and improves itself on the way.
+The problem of resource sparseness as space or time restrictions can be dealt in the same way, though, as long as respective clauses are not in the knowledge base, no guarantees can be given.
