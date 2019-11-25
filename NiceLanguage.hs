@@ -16,7 +16,7 @@ data VTerm v a = VBOT | VCONT (v a) | VAPPL (v (VTerm v a)) (v (VTerm v a))
 deriving instance (Eq a, Eq (v a), Eq (v (VTerm v a))) => Eq (VTerm v a)
 
 --the vvar has a list of the terms it is being used in
-data VarTerm v a = VVBOT | VVATOM (v a) | VVAR (PVarTerm v a) [PVarTerm v a] | VVAPPL (PVarTerm v a) (PVarTerm v a)
+data VarTerm v a = NOTASD | VVBOT | VVATOM (v a) | VVAR (PVarTerm v a) [PVarTerm v a] | VVAPPL (PVarTerm v a) (PVarTerm v a)
 deriving instance (Eq a, Eq (v a), Eq (v (VarTerm v a))) => Eq (VarTerm v a)
 
 type PVTerm v a = v (VTerm v a)
@@ -84,13 +84,37 @@ shalEqTermtoVTerm term = do {
   termToVTerm (\x -> lookupJust x mp) term
 }
 
+shalEqVarPtrs::(VarMonad m v, Eq a) => (a -> Bool) -> Term a -> m [(a,PVarTerm v a)]
+shalEqVarPtrs bound term = (zip vars) <$> sequence varms
+  where vars = nub $ termVars term
+        varms = (\x -> if bound x then new x >>= \v -> new $ VVATOM v else do{
+                          udf <- new NOTASD;
+                          var <- new $ VVAR udf [];
+                          put var $ VVAR udf [var]; --make sure it points to itself for rewireing
+                          return var;
+                        }) <$> vars
+
+termToVarTerm::(VarMonad m v, Eq a) => (a -> Bool) -> Term a -> m (PVarTerm v a)
+termToVarTerm bound term = do {
+  pts <- shalEqVarPtrs bound term;
+  termToVarTerm' (\x -> lookupJust x pts) term
+}
+
+termToVarTerm'::(VarMonad m v, Eq a) => (a -> PVarTerm v a) -> Term a -> m (PVarTerm v a)
+termToVarTerm' bound TBOT = new VVBOT
+termToVarTerm' bound (CONT a) = return $ bound a
+termToVarTerm' bound (APPL x y) = do {
+  x' <- termToVarTerm' bound x;
+  y' <- termToVarTerm' bound y;
+  new $ VVAPPL x' y'
+}
 --------------------------------------------------
 --term matching
 --------------------------------------------------
 --TODO: check whether merge is possible first
 --for now, just produces a new term for safety
-mergePointers::(VarMonad m v, Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
-mergePointers p1 p2 = do{
+mergePointers'::(VarMonad m v, Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
+mergePointers' p1 p2 = do{
   (t1,t2) <- getCts2 (p1,p2);
   case (t1,t2) of
     (VVBOT, VVBOT) -> Just <$> (new VVBOT)
@@ -106,11 +130,11 @@ mergePointers p1 p2 = do{
             return $ Just nv;
             --TODO: check if I thought this through well
         }
-    (VVAR a lst, term) -> mergePointers a p2   --TODO: Problem: already writes things into the variables, even if merge fails
-    (term, VVAR a lst) -> mergePointers p1 a  --TODO: all of this needs rewireing. TODO: traverse pointers backwards!
+    (VVAR a lst, term) -> mergePointers' a p2   --TODO: Problem: already writes things into the variables, even if merge fails
+    (term, VVAR a lst) -> mergePointers' p1 a
     (VVAPPL x y, VVAPPL x' y') -> do {
-          px <- mergePointers x x';
-          py <- mergePointers y y';
+          px <- mergePointers' x x';
+          py <- mergePointers' y y';
           case do {rx <- px; ry <- py; return $ VVAPPL rx ry} of
             Just apl -> Just <$> new apl
             Nothing -> return Nothing
