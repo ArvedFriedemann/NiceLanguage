@@ -9,6 +9,17 @@ import Data.Maybe
 import Data.List hiding (group)
 import Data.List.Key (group)
 import Safe
+import Control.Monad.Fail
+import qualified Control.Monad.State.Lazy as S (get,put)
+import Control.Monad.State.Lazy  hiding (get,put)
+
+import Data.Char
+import Data.IORef
+
+getS::(Monad m) => StateT a m a
+getS = S.get
+putS::(Monad m) => a -> StateT a m ()
+putS = S.put
 
 --do binding with a function as parameter. Makes context sensitive binding easier
 data Term a = TBOT | CONT a | APPL (Term a) (Term a) deriving (Show, Eq)
@@ -16,7 +27,7 @@ data VTerm v a = VBOT | VCONT (v a) | VAPPL (v (VTerm v a)) (v (VTerm v a))
 deriving instance (Eq a, Eq (v a), Eq (v (VTerm v a))) => Eq (VTerm v a)
 
 --the vvar has a list of the terms it is being used in
-data VarTerm v a = NOTASD | VVBOT | VVATOM (v a) | VVAR (PVarTerm v a) [PVarTerm v a] | VVAPPL (PVarTerm v a) (PVarTerm v a)
+data VarTerm v a = UNAS | VVBOT | VVATOM (v a) | VVAR (PVarTerm v a) [PVarTerm v a] | VVAPPL (PVarTerm v a) (PVarTerm v a)
 deriving instance (Eq a, Eq (v a), Eq (v (VarTerm v a))) => Eq (VarTerm v a)
 
 type PVTerm v a = v (VTerm v a)
@@ -88,7 +99,7 @@ shalEqVarPtrs::(VarMonad m v, Eq a) => (a -> Bool) -> Term a -> m [(a,PVarTerm v
 shalEqVarPtrs bound term = (zip vars) <$> sequence varms
   where vars = nub $ termVars term
         varms = (\x -> if bound x then new x >>= \v -> new $ VVATOM v else do{
-                          udf <- new NOTASD;
+                          udf <- new UNAS;
                           var <- new $ VVAR udf [];
                           put var $ VVAR udf [var]; --make sure it points to itself for rewireing
                           return var;
@@ -108,6 +119,67 @@ termToVarTerm' bound (APPL x y) = do {
   y' <- termToVarTerm' bound y;
   new $ VVAPPL x' y'
 }
+
+--------------------------------------------------
+--some output
+--------------------------------------------------
+
+type VarT a m v = StateT [a] m v
+
+nextVar::(Monad m) => VarT a m a
+nextVar = do {
+  s <- getS;
+  case s of
+    (x:xs) -> do {
+      putS xs;
+      return x
+    }
+    x -> error "no more variables to take from!" --weirdly needs to be here...
+}
+
+varTermToTerm::(VarMonad m v) => [a] -> VarTerm v a -> m (Term a)
+varTermToTerm vars term = evalStateT (varTermToTerm' term) vars
+
+varTermToTerm'::(VarMonad m v) => VarTerm v a -> StateT [a] m (Term a)
+varTermToTerm' UNAS = CONT <$> nextVar
+varTermToTerm' VVBOT = return TBOT
+varTermToTerm' (VVATOM p) = lift $ CONT <$> get p
+varTermToTerm' v@(VVAR p lst) = do {
+  cont <- lift $ get p;
+  case cont of
+    UNAS -> do {
+      var <- nextVar;
+      ptr <- lift $ new var;
+      lift $ sequence $ (\x -> put x $ VVATOM ptr) <$> lst;
+      varTermToTerm' (VVATOM ptr);
+    }
+    x -> varTermToTerm' x
+}
+varTermToTerm' (VVAPPL p1 p2) = do {
+  x <- lift $ get p1;
+  y <- lift $ get p2;
+  x' <- varTermToTerm' x;
+  y' <- varTermToTerm' y;
+  return $ APPL x' y'
+}
+
+testVars = (\x -> [x]) <$> ['A'..]
+
+test1::IO (Term String)
+test1 = (tp >>= get >>= varTermToTerm testVars)
+  where t = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
+        tp = (termToVarTerm (isLower.head) t)::IO (IORef (VarTerm IORef String))
+
+test2::IO (Term String)
+test2 = do{
+  c <- (new "x")::IO (IORef String);
+  t1 <- new (VVATOM c);
+  varTermToTerm testVars $ VVAPPL t1 t1
+}
+
+ioifyPVarTerm::IO (IORef (VarTerm IORef String)) -> IO (IORef (VarTerm IORef String))
+ioifyPVarTerm x = x
+
 --------------------------------------------------
 --term matching
 --------------------------------------------------
@@ -121,14 +193,18 @@ mergePointers' p1 p2 = do{
     (VVATOM a, VVATOM b)
         | a == b -> Just <$> (new $ VVATOM a)
         | otherwise ->  return Nothing
-    (VVAR a lst1, VVAR b lst2) -> do { --TODO: Make sure variables also point to themselves!
-            nv <- new (VVAR a []);
-            rewireTo a (lst1++[nv]++lst2) nv;
-            --rewire both variables to a common target, merging the reference lists
-            sequence $ rewireTo a (nv:lst1) <$> lst2;
-            sequence $ rewireTo a (nv:lst2) <$> lst1;
-            return $ Just nv;
-            --TODO: check if I thought this through well
+    (VVAR a lst1, VVAR b lst2) -> do {
+            mab_merg <- mergePointers' a b;
+            case mab_merg of
+              Just merg -> do {
+                nv <- new (VVAR merg []);
+                put nv (VVAR merg (lst1++[nv]++lst2));
+                --rewire both variables to a common target, merging the reference lists
+                sequence $ rewireTo a (nv:lst1) <$> lst2;
+                sequence $ rewireTo a (nv:lst2) <$> lst1;
+                return $ Just nv;
+              }
+              Nothing -> return Nothing;
         }
     (VVAR a lst, term) -> mergePointers' a p2   --TODO: Problem: already writes things into the variables, even if merge fails
     (term, VVAR a lst) -> mergePointers' p1 a
@@ -139,6 +215,9 @@ mergePointers' p1 p2 = do{
             Just apl -> Just <$> new apl
             Nothing -> return Nothing
         }
+    (UNAS, UNAS) -> Just <$> new UNAS;
+    (UNAS, t ) -> return $ Just p2; --WARNING! not sure if that gives the right behaviour
+    (t , UNAS) -> return $ Just p1;
     (x,y) -> return Nothing
 }
 
