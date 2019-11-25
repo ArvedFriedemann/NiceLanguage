@@ -31,10 +31,14 @@ instance (VarMonad m v) => Rewirable m v (VTerm v a) where
   rewire fkt x = x
 -}
 
-rewire ptrold ptrnew newrefs (VVAPPL x y) = VVAPPL (exchange ptrold ptrnew x) (exchange ptrold ptrnew y) --shouldn't be necessary. state of a pointer should be in the content
-rewire ptrold ptrnew newrefs v@(VVAR ptr lst)
-  | prtold == ptr = VVAR ptrnew (lst ++ newrefs)
-  | otherwise = v
+rewireTo::(VarMonad m v) => PVarTerm v a -> [PVarTerm v a] -> PVarTerm v a -> m ()
+--rewire ptrold ptrnew newrefs (VVAPPL x y) = VVAPPL (exchange ptrold ptrnew x) (exchange ptrold ptrnew y) --shouldn't be necessary. Variables should only point to other variables
+rewireTo ptrnew newrefs pv = do {
+  v <- get pv;
+  case v of
+    (VVAR ptr lst) -> put pv $ VVAR ptrnew (lst ++ newrefs)
+    --other cases should not happen. Vars should only point to other vars
+}
 
 termVars::Term a -> [a]
 termVars TBOT = []
@@ -93,7 +97,12 @@ mergePointers p1 p2 = do{
     (VVATOM a, VVATOM b)
         | a == b -> Just <$> (new $ VVATOM a)
         | otherwise ->  return Nothing
-    (VVAR a lst1, VVAR b lst2) -> fail "TODO!"--TODO: rewire both variables to a common location now
+    (VVAR a lst1, VVAR b lst2) -> do { --TODO: Make sure variables also point to themselves!
+            --rewire both variables to a common target, merging the reference lists
+            sequence $ rewireTo a lst1 <$> lst2;
+            sequence $ rewireTo a lst2 <$> lst1;
+            return $ Just a --TODO: that doesn't work
+        }
     (VVAR a lst, term) -> mergePointers a p2   --TODO: Problem: already writes things into the variables, even if merge fails
     (term, VVAR a lst) -> mergePointers p1 a  --TODO: all of this needs rewireing. TODO: traverse pointers backwards!
     (VVAPPL x y, VVAPPL x' y') -> do {
@@ -120,7 +129,7 @@ getCts3::(VarMonad m v) => (v a, v b, v c) -> m (a, b, c)
 getCts3 (p1, p2, p3) = do { x1 <- get p1; x2 <- get p2; x3 <- get p3; return (x1,x2, x3) }
 
 
-exchange::(Eq a) => a -> a -> a
+exchange::(Eq a) => a -> a -> a -> a
 exchange match ex y
   | match==y = ex
   | otherwise = y
