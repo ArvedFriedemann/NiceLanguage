@@ -98,10 +98,13 @@ mergePointers p1 p2 = do{
         | a == b -> Just <$> (new $ VVATOM a)
         | otherwise ->  return Nothing
     (VVAR a lst1, VVAR b lst2) -> do { --TODO: Make sure variables also point to themselves!
+            nv <- new (VVAR a []);
+            rewireTo a (lst1++[nv]++lst2) nv;
             --rewire both variables to a common target, merging the reference lists
-            sequence $ rewireTo a lst1 <$> lst2;
-            sequence $ rewireTo a lst2 <$> lst1;
-            return $ Just a --TODO: that doesn't work
+            sequence $ rewireTo a (nv:lst1) <$> lst2;
+            sequence $ rewireTo a (nv:lst2) <$> lst1;
+            return $ Just nv;
+            --TODO: check if I thought this through well
         }
     (VVAR a lst, term) -> mergePointers a p2   --TODO: Problem: already writes things into the variables, even if merge fails
     (term, VVAR a lst) -> mergePointers p1 a  --TODO: all of this needs rewireing. TODO: traverse pointers backwards!
