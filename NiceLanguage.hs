@@ -151,7 +151,7 @@ varTermToTerm' v@(VVAR p lst) = do {
       var <- nextVar;
       ptr <- lift $ new var;
       lift $ sequence $ (\x -> put x $ VVATOM ptr) <$> lst;
-      varTermToTerm' (VVATOM ptr);
+      (lift $ get p) >>= varTermToTerm';
     }
     x -> varTermToTerm' x
 }
@@ -164,11 +164,12 @@ varTermToTerm' (VVAPPL p1 p2) = do {
 }
 
 testVars = (\x -> [x]) <$> ['A'..]
+stdBound = (isLower.head)
 
 test1::IO (Term String)
 test1 = (tp >>= get >>= varTermToTerm testVars)
   where t = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
-        tp = (termToVarTerm (isLower.head) t)::IO (IORef (VarTerm IORef String))
+        tp = (termToVarTerm stdBound t)::IO (IORef (VarTerm IORef String))
 
 test2::IO (Term String)
 test2 = do{
@@ -176,6 +177,27 @@ test2 = do{
   t1 <- new (VVATOM c);
   varTermToTerm testVars $ VVAPPL t1 t1
 }
+
+test3::IO [Term String]
+test3 = do {
+  t <- ioifyPVarTerm $ termToVarTerm stdBound (APPL t1 t2);
+  (VVAPPL pt1 pt2) <- get t;
+  merg <- mergePointers' pt1 pt2;
+  (case merg of
+        Just melt -> do {
+          (mptr, pt1', pt2') <- get3 melt pt1 pt2;
+          --tp1 <- varTermToTerm testVars pt1';
+          --tp2 <- varTermToTerm (drop 5 testVars) pt2';
+          tres <- varTermToTerm (drop 10 testVars) mptr;
+          --TODO: Problem. During the merging, the variable equivalences are changed in the original terms.
+          --therefore they are interconnected afterwards
+          return [{-tp1, tp2, -}tres]
+        }
+        Nothing -> return [])
+}
+  where t1 = APPL (CONT "x") (CONT"Y")--t1 = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
+        t2 = APPL (CONT "Z") (CONT"Z")--t2 = APPL (APPL (CONT "Y") (CONT "Y")) ((CONT "x"))
+
 
 ioifyPVarTerm::IO (IORef (VarTerm IORef String)) -> IO (IORef (VarTerm IORef String))
 ioifyPVarTerm x = x
@@ -187,7 +209,7 @@ ioifyPVarTerm x = x
 --for now, just produces a new term for safety
 mergePointers'::(VarMonad m v, Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
 mergePointers' p1 p2 = do{
-  (t1,t2) <- getCts2 (p1,p2);
+  (t1,t2) <- get2 p1 p2;
   case (t1,t2) of
     (VVBOT, VVBOT) -> Just <$> (new VVBOT)
     (VVATOM a, VVATOM b)
@@ -206,8 +228,16 @@ mergePointers' p1 p2 = do{
               }
               Nothing -> return Nothing;
         }
-    (VVAR a lst, term) -> mergePointers' a p2   --TODO: Problem: already writes things into the variables, even if merge fails
-    (term, VVAR a lst) -> mergePointers' p1 a
+    (term, VVAR a lst) -> mergePointers' p2 p1   --TODO: Problem: already writes things into the variables, even if merge fails
+    (VVAR a lst, term) -> do {
+      mptr <- mergePointers' a p2;
+      case mptr of
+        Just ptr -> do {
+          get ptr >>= (put a);
+          return $ Just ptr
+        }
+        Nothing -> return Nothing
+    }
     (VVAPPL x y, VVAPPL x' y') -> do {
           px <- mergePointers' x x';
           py <- mergePointers' y y';
@@ -229,10 +259,10 @@ mergePointers' p1 p2 = do{
 getCts::(VarMonad m v) => [v a] -> m [a]
 getCts pts = sequence $ get <$> pts
 
-getCts2::(VarMonad m v) => (v a, v b) -> m (a, b)
-getCts2 (p1, p2) = do { x1 <- get p1; x2 <- get p2; return (x1,x2) }
-getCts3::(VarMonad m v) => (v a, v b, v c) -> m (a, b, c)
-getCts3 (p1, p2, p3) = do { x1 <- get p1; x2 <- get p2; x3 <- get p3; return (x1,x2, x3) }
+get2::(VarMonad m v) => v a -> v b -> m (a, b)
+get2 p1 p2 = do { x1 <- get p1; x2 <- get p2; return (x1,x2) }
+get3::(VarMonad m v) => v a -> v b -> v c -> m (a, b, c)
+get3 p1 p2 p3 = do { x1 <- get p1; x2 <- get p2; x3 <- get p3; return (x1,x2, x3) }
 
 
 exchange::(Eq a) => a -> a -> a -> a
