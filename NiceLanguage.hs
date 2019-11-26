@@ -137,6 +137,8 @@ nextVar = do {
     x -> error "no more variables to take from!" --weirdly needs to be here...
 }
 
+pVarTermToTerm::(VarMonad m v) => [a] -> PVarTerm v a -> m (Term a)
+pVarTermToTerm vars term = get term >>= varTermToTerm vars
 varTermToTerm::(VarMonad m v) => [a] -> VarTerm v a -> m (Term a)
 varTermToTerm vars term = evalStateT (varTermToTerm' term) vars
 
@@ -164,12 +166,12 @@ varTermToTerm' (VVAPPL p1 p2) = do {
 }
 
 testVars = (\x -> [x]) <$> ['A'..]
-stdBound = (isLower.head)
+testBound = (isLower.head)
 
 test1::IO (Term String)
 test1 = (tp >>= get >>= varTermToTerm testVars)
   where t = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
-        tp = (termToVarTerm stdBound t)::IO (IORef (VarTerm IORef String))
+        tp = (termToVarTerm testBound t)::IO (IORef (VarTerm IORef String))
 
 test2::IO (Term String)
 test2 = do{
@@ -180,7 +182,28 @@ test2 = do{
 
 test3::IO [Term String]
 test3 = do {
-  t <- ioifyPVarTerm $ termToVarTerm stdBound (APPL t1 t2);
+  t <- ioifyPVarTerm $ termToVarTerm testBound (APPL t1 t2);
+  (VVAPPL pt1 pt2) <- get t;
+  merg <- mergePointers' pt1 pt2;
+  (case merg of
+        Just melt -> do {
+          (mptr, pt1', pt2') <- get3 melt pt1 pt2;
+          --tp1 <- varTermToTerm testVars pt1';
+          --tp2 <- varTermToTerm (drop 5 testVars) pt2';
+          tres <- varTermToTerm (drop 10 testVars) mptr;
+          --TODO: Problem. During the merging, the variable equivalences are changed in the original terms.
+          --therefore they are interconnected afterwards
+          --TODO!!!!!!
+          return [{-tp1, tp2, -}tres]
+        }
+        Nothing -> return [])
+}
+  where t1 = APPL (CONT "x") (CONT"Y")--t1 = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
+        t2 = APPL (CONT "Z") (CONT"Z")--t2 = APPL (APPL (CONT "Y") (CONT "Y")) ((CONT "x"))
+
+test4::IO [Term String]
+test4 = do {
+  t <- ioifyPVarTerm $ termToVarTerm testBound (APPL t1 t2);
   (VVAPPL pt1 pt2) <- get t;
   merg <- mergePointers' pt1 pt2;
   (case merg of
@@ -195,8 +218,8 @@ test3 = do {
         }
         Nothing -> return [])
 }
-  where t1 = APPL (CONT "x") (CONT"Y")--t1 = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
-        t2 = APPL (CONT "Z") (CONT"Z")--t2 = APPL (APPL (CONT "Y") (CONT "Y")) ((CONT "x"))
+  where t1 = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
+        t2 = APPL (APPL (CONT "Z") (CONT "Z")) ((CONT "x"))
 
 
 ioifyPVarTerm::IO (IORef (VarTerm IORef String)) -> IO (IORef (VarTerm IORef String))
