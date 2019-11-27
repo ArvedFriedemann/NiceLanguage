@@ -245,7 +245,7 @@ mergePointers' p1 p2 = do{
                 nv <- new (VVAR merg []);
                 put nv (VVAR merg (lst1++[nv]++lst2));
                 --rewire both variables to a common target, merging the reference lists
-                sequence $ rewireTo a (nv:lst1) <$> lst2;
+                sequence $ rewireTo a (nv:lst1) <$> lst2; --TODO: this should be merg
                 sequence $ rewireTo a (nv:lst2) <$> lst1;
                 return $ Just nv;
               }
@@ -268,7 +268,7 @@ mergePointers' p1 p2 = do{
             Just apl -> Just <$> new apl
             Nothing -> return Nothing
         }
-    (UNAS, UNAS) -> Just <$> new UNAS;
+    (UNAS, UNAS) -> Just <$> new UNAS; --return $ Just p1;--WARNING! --Just <$> new UNAS;
     (UNAS, t ) -> return $ Just p2; --WARNING! not sure if that gives the right behaviour
     (t , UNAS) -> return $ Just p1;
     (x,y) -> return Nothing
