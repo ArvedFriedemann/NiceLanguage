@@ -152,15 +152,15 @@ varTermToTerm' v@(VVAR p lst) = do {
     UNAS -> do {
       var <- nextVar;
       ptr <- lift $ new var;
-      lift $ sequence $ (\x -> put x $ VVATOM ptr) <$> lst;
+      lift $ put p (VVATOM ptr);
       (lift $ get p) >>= varTermToTerm';
     }
     x -> varTermToTerm' x
 }
 varTermToTerm' (VVAPPL p1 p2) = do {
   x <- lift $ get p1;
-  y <- lift $ get p2;
   x' <- varTermToTerm' x;
+  y <- lift $ get p2;
   y' <- varTermToTerm' y;
   return $ APPL x' y'
 }
@@ -230,8 +230,8 @@ ioifyPVarTerm x = x
 --------------------------------------------------
 --TODO: check whether merge is possible first
 --for now, just produces a new term for safety
-mergePointers'::(VarMonad m v, Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
-mergePointers' p1 p2 = do{
+mergePointers'::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
+mergePointers' p1 p2 = if p1==p2 then return $ Just p1 else do{
   (t1,t2) <- get2 p1 p2;
   case (t1,t2) of
     (VVBOT, VVBOT) -> Just <$> (new VVBOT)
@@ -245,8 +245,8 @@ mergePointers' p1 p2 = do{
                 nv <- new (VVAR merg []);
                 put nv (VVAR merg (lst1++[nv]++lst2));
                 --rewire both variables to a common target, merging the reference lists
-                sequence $ rewireTo a (nv:lst1) <$> lst2; --TODO: this should be merg
-                sequence $ rewireTo a (nv:lst2) <$> lst1;
+                sequence $ rewireTo merg (nv:lst1) <$> lst2;
+                sequence $ rewireTo merg (nv:lst2) <$> lst1;
                 return $ Just nv;
               }
               Nothing -> return Nothing;
@@ -268,7 +268,7 @@ mergePointers' p1 p2 = do{
             Just apl -> Just <$> new apl
             Nothing -> return Nothing
         }
-    (UNAS, UNAS) -> Just <$> new UNAS; --return $ Just p1;--WARNING! --Just <$> new UNAS;
+    (UNAS, UNAS) -> return $ Just p1;--WARNING! --Just <$> new UNAS;
     (UNAS, t ) -> return $ Just p2; --WARNING! not sure if that gives the right behaviour
     (t , UNAS) -> return $ Just p1;
     (x,y) -> return Nothing
