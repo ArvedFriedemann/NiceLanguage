@@ -77,7 +77,7 @@ stdVars = aToZ ++ (concat $ zipWith (\i s -> map (\k -> k++(show i)) s) [0..] (r
 
 stdUnify::String -> String -> IO ()
 stdUnify s1 s2 = do {
-  (VVAPPL pt1 pt2) <- get =<< (ioifyPVarTerm $ termToVarTerm stdBound (APPL (rt s1) (rt s2)) );
+  (VVAPPL pt1 pt2 seen) <- get =<< (ioifyPVarTerm $ termToVarTerm stdBound (APPL (rt s1) (rt s2)) );
   mptm <- mergePointers pt1 pt2;
   case mptm of
     Just ptm -> putStrLn =<< showPVarTerm ptm

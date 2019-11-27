@@ -12,6 +12,7 @@ import Safe
 import Control.Monad.Fail
 import qualified Control.Monad.State.Lazy as S (get,put)
 import Control.Monad.State.Lazy  hiding (get,put)
+import Debug.Trace
 
 import Data.Char
 import Data.IORef
@@ -53,7 +54,7 @@ newPVT::(VarMonad m v) => (v Bool -> VarTerm v a) -> Bool -> m (PVarTerm v a)
 newPVT fkt b = new b >>= \x -> new (fkt x)
 
 newUPVT::(VarMonad m v) => (v Bool -> VarTerm v a) -> m (PVarTerm v a)
-newUPVT fkt = new False >>= \x -> new (fkt x)
+newUPVT fkt = newPVT fkt False
 
 putPVT::(VarMonad m v) => PVarTerm v a -> (v Bool -> VarTerm v a) -> m ()
 putPVT ptr fkt = do {
@@ -193,7 +194,7 @@ test3::IO [Term String]
 test3 = do {
   t <- ioifyPVarTerm $ termToVarTerm testBound (APPL t1 t2);
   (VVAPPL pt1 pt2 _) <- get t;
-  merg <- mergePointers' pt1 pt2;
+  merg <- mergePointers pt1 pt2;
   (case merg of
         Just melt -> do {
           (mptr, pt1', pt2') <- get3 melt pt1 pt2;
@@ -214,7 +215,7 @@ test4::IO [Term String]
 test4 = do {
   t <- ioifyPVarTerm $ termToVarTerm testBound (APPL t1 t2);
   (VVAPPL pt1 pt2 _) <- get t;
-  merg <- mergePointers' pt1 pt2;
+  merg <- mergePointers pt1 pt2;
   (case merg of
         Just melt -> do {
           (mptr, pt1', pt2') <- get3 melt pt1 pt2;
@@ -238,57 +239,58 @@ ioifyPVarTerm x = x
 --term matching
 --------------------------------------------------
 --TODO: check whether merge is possible first
---for now, just produces a new term for safety
 mergePointers::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
-mergePointers p1 p2 = if p1==p2 then return $ Just p1 else do {
+mergePointers p1 p2 = mergePointers' p1 p1 p2
+mergePointers'::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
+mergePointers' mainptr p1 p2 = do {
   t1 <- get p1;
   t2 <- get p2;
   b1 <- get $ getSeenPtr t1;
   b2 <- get $ getSeenPtr t2;
   put (getSeenPtr t1) True;
   put (getSeenPtr t2) True;
-  if b1 && b2 then return $ Just p1 else mergePointers' p1 p2
+  if b1 && b2 then return $ Just p1 else mergePointers'' mainptr p1 p2
 }
-mergePointers'::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
+mergePointers''::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
 --throughout this algorithm, both terms are made euqal (so they actually change). The first term is assumed to be
 --the main one and returned as the merged term.
-mergePointers' p1 p2 = do{
+mergePointers'' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
   (t1,t2) <- get2 p1 p2;
   case (t1,t2) of
-    (VVBOT _, VVBOT _) -> return $ Just p1
+    (VVBOT _, VVBOT _) -> return $ Just mainptr
     (VVATOM a _, VVATOM b _)
-        | a == b -> return $ Just p1
+        | a == b -> return $ Just mainptr
         | otherwise ->  return Nothing
     (VVAR a lst1 _, VVAR b lst2 _) -> do {
-            mab_merg <- mergePointers a b;
+            mab_merg <- mergePointers' a a b;
             case mab_merg of
               Just merg -> do {
                 --rewire both variables to a common target, merging the reference lists
                 sequence $ rewireTo merg (lst1) <$> lst2;
                 sequence $ rewireTo merg (lst2) <$> lst1;
-                return $ Just merg;
+                return $ Just mainptr; --necessary. Otherwise, if a variable gets rewired later, terms don't notice.
               }
               Nothing -> return Nothing;
         }
-    (term, VVAR a lst _) -> mergePointers p2 p1   --TODO: Problem: already writes things into the variables, even if merge fails
+    (term, VVAR a lst _) -> mergePointers'' p2 p2 p1 --needs to be mergePointers' to avoid recursion lock
     (VVAR a lst _, term) -> do {
-      mptr <- mergePointers a p2;
+      mptr <- mergePointers' a a p2;
       case mptr of
         Just ptr -> do {
-          get ptr >>= (put a);
-          return $ Just ptr
+          put a =<< get ptr;
+          return $ Just p1; --again, variable needs to be returned for changes to come into effect!
         }
         Nothing -> return Nothing
     }
     (VVAPPL x y _, VVAPPL x' y' _) -> do {
-          px <- mergePointers x x';
-          py <- mergePointers y y';
+          px <- mergePointers' x x x';
+          py <- mergePointers' y y y';
           case do {rx <- px; ry <- py; return $ VVAPPL rx ry} of
-            --Just apl -> Just <$> new apl --would create a new term
+            --Just apl -> Just <$> newPVT apl True --would create a new term. WARNING! Recursion lock might not work here
             Just apl -> do {putPVT p1 $ apl; putPVT p2 $ apl; return $ Just p1}
             Nothing -> return Nothing
         }
-    (UNAS _, UNAS _) -> return $ Just p1;--WARNING! --Just <$> new UNAS;
+    (UNAS _, UNAS _) -> return $ Just mainptr;--WARNING! --Just <$> newPVT UNAS True;
     (UNAS _, t ) -> return $ Just p2; --WARNING! not sure if that gives the right behaviour
     (t , UNAS _) -> return $ Just p1;
     (x,y) -> return Nothing
