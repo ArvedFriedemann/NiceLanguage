@@ -1,13 +1,14 @@
 module NLParser where
 
 import NiceLanguage
-import Text.Parsec
+import Text.Parsec hiding (spaces)
 import Data.Char
 import Control.Monad.Trans.Writer.Lazy
 import Control.Monad.Var
 import Data.IORef
 
 forbiddenSymb = "() \t\n`"
+spaceChars = " \t"
 
 idfr::Parsec String st String
 idfr = many1 (noneOf forbiddenSymb)
@@ -19,10 +20,16 @@ baseTerm::Parsec String st (Term String)
 baseTerm = (try $ string "()" >> return TBOT) <|> (try $ parens term) <|> (CONT <$> idfr)
 
 term::Parsec String st (Term String)
-term = (sepBy baseTerm (many1 $ char ' ')) >>= \x -> return $ foldl1 APPL x
+term = (spaces >> sepEndBy1 baseTerm spaces1) >>= \x -> return $ foldl1 APPL x
 
 parens::Parsec String st a -> Parsec String st a
 parens p = do {string "("; r <- p; string ")"; return r}
+
+spaces::Parsec String st String
+spaces = many (oneOf spaceChars)
+
+spaces1::Parsec String st String
+spaces1 = many1 (oneOf spaceChars)
 
 encap::Parsec String st b -> Parsec String st a -> Parsec String st a
 encap e p = do {e; r <- p; e; return r}
