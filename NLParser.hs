@@ -6,6 +6,7 @@ import Data.Char
 import Control.Monad.Trans.Writer.Lazy
 import Control.Monad.Var
 import Data.IORef
+import Debug.Trace
 
 forbiddenSymb = "() \t\n`"
 spaceChars = " \t"
