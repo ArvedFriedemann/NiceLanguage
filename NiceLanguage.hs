@@ -28,8 +28,8 @@ data VTerm v a = VBOT | VCONT (v a) | VAPPL (v (VTerm v a)) (v (VTerm v a))
 deriving instance (Eq a, Eq (v a), Eq (v (VTerm v a))) => Eq (VTerm v a)
 
 --the vvar has a list of the terms it is being used in
-data VarTerm v a = UNAS (v Bool) | VVBOT (v Bool) | VVATOM (v a) (v Bool) | VVAR (PVarTerm v a) [PVarTerm v a] (v Bool) | VVAPPL (PVarTerm v a) (PVarTerm v a) (v Bool)
-deriving instance (Eq a, Eq (v a), Eq (v Bool), Eq (v (VarTerm v a))) => Eq (VarTerm v a)
+data VarTerm v a = UNAS | VVBOT | VVATOM (v a)| VVAR (PVarTerm v a) [PVarTerm v a] | VVAPPL (PVarTerm v a) (PVarTerm v a)
+deriving instance (Eq a, Eq (v a), Eq (v (VarTerm v a))) => Eq (VarTerm v a)
 
 type PVTerm v a = v (VTerm v a)
 type PVarTerm v a = v (VarTerm v a)
@@ -43,38 +43,13 @@ instance (VarMonad m v) => Rewirable m v (VTerm v a) where
   rewire fkt x = x
 -}
 
-getSeenPtr::VarTerm v a -> (v Bool)
-getSeenPtr (UNAS p) = p
-getSeenPtr (VVBOT p) = p
-getSeenPtr (VVATOM _ p) = p
-getSeenPtr (VVAR _ _ p) = p
-getSeenPtr (VVAPPL _ _ p) = p
-
-newPVT::(VarMonad m v) => (v Bool -> VarTerm v a) -> Bool -> m (PVarTerm v a)
-newPVT fkt b = new b >>= \x -> new (fkt x)
-
-newUPVT::(VarMonad m v) => (v Bool -> VarTerm v a) -> m (PVarTerm v a)
-newUPVT fkt = newPVT fkt False
-
-putPVT::(VarMonad m v) => PVarTerm v a -> (v Bool -> VarTerm v a) -> m ()
-putPVT ptr fkt = do {
-  term <- get ptr;
-  put ptr (fkt $ getSeenPtr term)
-}
-
-putPVTF::(VarMonad m v) => PVarTerm v a -> (v Bool -> VarTerm v a) -> m ()
-putPVTF ptr fkt = do {
-  term <- get ptr;
-  put (getSeenPtr term) False;
-  put ptr (fkt $ getSeenPtr term)
-}
 
 rewireTo::(VarMonad m v) => PVarTerm v a -> [PVarTerm v a] -> PVarTerm v a -> m ()
 --rewire ptrold ptrnew newrefs (VVAPPL x y) = VVAPPL (exchange ptrold ptrnew x) (exchange ptrold ptrnew y) --shouldn't be necessary. Variables should only point to other variables
 rewireTo ptrnew newrefs pv = do {
   v <- get pv;
   case v of
-    (VVAR ptr lst seen) -> put pv $ VVAR ptrnew (lst ++ newrefs) seen
+    (VVAR ptr lst) -> put pv $ VVAR ptrnew (lst ++ newrefs)
     --other cases should not happen. Vars should only point to other vars
 }
 
@@ -107,10 +82,10 @@ shalEqTermtoVTerm term = do {
 shalEqVarPtrs::(VarMonad m v, Eq a) => (a -> Bool) -> Term a -> m [(a,PVarTerm v a)]
 shalEqVarPtrs bound term = (zip vars) <$> sequence varms
   where vars = nub $ termVars term
-        varms = (\x -> if bound x then new x >>= \v -> newUPVT (VVATOM v) else do{
-                          udf <- newUPVT UNAS;
-                          var <- newUPVT $ VVAR udf [];
-                          putPVT var $ VVAR udf [var]; --make sure it points to itself for rewireing
+        varms = (\x -> if bound x then new x >>= \v -> new (VVATOM v) else do{
+                          udf <- new UNAS;
+                          var <- new $ VVAR udf [];
+                          put var $ VVAR udf [var]; --make sure it points to itself for rewireing
                           return var;
                         }) <$> vars
 
@@ -121,12 +96,12 @@ termToVarTerm bound term = do {
 }
 
 termToVarTerm'::(VarMonad m v, Eq a) => (a -> PVarTerm v a) -> Term a -> m (PVarTerm v a)
-termToVarTerm' bound TBOT = newUPVT VVBOT
+termToVarTerm' bound TBOT = new VVBOT
 termToVarTerm' bound (CONT a) = return $ bound a
 termToVarTerm' bound (APPL x y) = do {
   x' <- termToVarTerm' bound x;
   y' <- termToVarTerm' bound y;
-  newUPVT $ VVAPPL x' y'
+  new $ VVAPPL x' y'
 }
 
 --------------------------------------------------
@@ -146,91 +121,34 @@ nextVar = do {
     x -> error "no more variables to take from!" --weirdly needs to be here...
 }
 
+
 pVarTermToTerm::(VarMonad m v) => [a] -> PVarTerm v a -> m (Term a)
 pVarTermToTerm vars term = get term >>= varTermToTerm vars
 varTermToTerm::(VarMonad m v) => [a] -> VarTerm v a -> m (Term a)
 varTermToTerm vars term = evalStateT (varTermToTerm' term) vars
 
 varTermToTerm'::(VarMonad m v) => VarTerm v a -> StateT [a] m (Term a)
-varTermToTerm' (UNAS _) = CONT <$> nextVar
-varTermToTerm' (VVBOT _) = return TBOT
-varTermToTerm' (VVATOM p _) = lift $ (CONT <$> get p)
-varTermToTerm' v@(VVAR p lst _) = do {
+varTermToTerm' UNAS = CONT <$> nextVar
+varTermToTerm' VVBOT = return TBOT
+varTermToTerm' (VVATOM p) = lift $ (CONT <$> get p)
+varTermToTerm' v@(VVAR p lst) = do {
   cont <- lift $ get p;
   case cont of
-    (UNAS _) -> do {
+    UNAS -> do {
       var <- nextVar;
       ptr <- lift $ new var;
-      lift $ putPVTF p (VVATOM ptr);
+      lift $ put p (VVATOM ptr);
       (lift $ get p) >>= varTermToTerm';
     }
     x -> varTermToTerm' x
 }
-varTermToTerm' (VVAPPL p1 p2 _) = do {
+varTermToTerm' (VVAPPL p1 p2) = do {
   x <- lift $ get p1;
   x' <- varTermToTerm' x;
   y <- lift $ get p2;
   y' <- varTermToTerm' y;
   return $ APPL x' y'
 }
-
-testVars = (\x -> [x]) <$> ['A'..]
-testBound = (isLower.head)
-
-test1::IO (Term String)
-test1 = (tp >>= get >>= varTermToTerm testVars)
-  where t = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
-        tp = (termToVarTerm testBound t)::IO (IORef (VarTerm IORef String))
-
-test2::IO (Term String)
-test2 = do{
-  c <- (new "x")::IO (IORef String);
-  t1 <- newUPVT (VVATOM c);
-  p <- new False;
-  varTermToTerm testVars (VVAPPL t1 t1 p)
-}
-
-test3::IO [Term String]
-test3 = do {
-  t <- ioifyPVarTerm $ termToVarTerm testBound (APPL t1 t2);
-  (VVAPPL pt1 pt2 _) <- get t;
-  merg <- mergePointers pt1 pt2;
-  (case merg of
-        Just melt -> do {
-          (mptr, pt1', pt2') <- get3 melt pt1 pt2;
-          --tp1 <- varTermToTerm testVars pt1';
-          --tp2 <- varTermToTerm (drop 5 testVars) pt2';
-          tres <- varTermToTerm (drop 10 testVars) mptr;
-          --TODO: Problem. During the merging, the variable equivalences are changed in the original terms.
-          --therefore they are interconnected afterwards
-          --TODO!!!!!!
-          return [{-tp1, tp2, -}tres]
-        }
-        Nothing -> return [])
-}
-  where t1 = APPL (CONT "x") (CONT"Y")--t1 = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
-        t2 = APPL (CONT "Z") (CONT"Z")--t2 = APPL (APPL (CONT "Y") (CONT "Y")) ((CONT "x"))
-
-test4::IO [Term String]
-test4 = do {
-  t <- ioifyPVarTerm $ termToVarTerm testBound (APPL t1 t2);
-  (VVAPPL pt1 pt2 _) <- get t;
-  merg <- mergePointers pt1 pt2;
-  (case merg of
-        Just melt -> do {
-          (mptr, pt1', pt2') <- get3 melt pt1 pt2;
-          --tp1 <- varTermToTerm testVars pt1';
-          --tp2 <- varTermToTerm (drop 5 testVars) pt2';
-          tres <- varTermToTerm (drop 10 testVars) mptr;
-          --TODO: Problem. During the merging, the variable equivalences are changed in the original terms.
-          --therefore they are interconnected afterwards
-          return [{-tp1, tp2, -}tres]
-        }
-        Nothing -> return [])
-}
-  where t1 = APPL (APPL (CONT "x") (CONT "Y")) ((CONT "x"))
-        t2 = APPL (APPL (CONT "Z") (CONT "Z")) ((CONT "x"))
-
 
 ioifyPVarTerm::IO (IORef (VarTerm IORef String)) -> IO (IORef (VarTerm IORef String))
 ioifyPVarTerm x = x
@@ -241,27 +159,18 @@ ioifyPVarTerm x = x
 --TODO: check whether merge is possible first
 mergePointers::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
 mergePointers p1 p2 = mergePointers' p1 p1 p2
+
 mergePointers'::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
-mergePointers' mainptr p1 p2 = do {
-  t1 <- get p1;
-  t2 <- get p2;
-  b1 <- get $ getSeenPtr t1;
-  b2 <- get $ getSeenPtr t2;
-  put (getSeenPtr t1) True;
-  put (getSeenPtr t2) True;
-  if b1 && b2 then return $ Just p1 else mergePointers'' mainptr p1 p2
-}
-mergePointers''::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
 --throughout this algorithm, both terms are made euqal (so they actually change). The first term is assumed to be
 --the main one and returned as the merged term.
-mergePointers'' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
+mergePointers' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
   (t1,t2) <- get2 p1 p2;
   case (t1,t2) of
-    (VVBOT _, VVBOT _) -> return $ Just mainptr
-    (VVATOM a _, VVATOM b _)
+    (VVBOT, VVBOT) -> return $ Just mainptr
+    (VVATOM a, VVATOM b)
         | a == b -> return $ Just mainptr
         | otherwise ->  return Nothing
-    (VVAR a lst1 _, VVAR b lst2 _) -> do {
+    (VVAR a lst1, VVAR b lst2) -> do {
             mab_merg <- mergePointers' a a b;
             case mab_merg of
               Just merg -> do {
@@ -272,8 +181,8 @@ mergePointers'' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
               }
               Nothing -> return Nothing;
         }
-    (term, VVAR a lst _) -> mergePointers'' p2 p2 p1 --needs to be mergePointers' to avoid recursion lock
-    (VVAR a lst _, term) -> do {
+    (term, VVAR a lst) -> mergePointers' p2 p2 p1 --needs to be this mergePointers to avoid recursion lock
+    (VVAR a lst, term) -> do {
       mptr <- mergePointers' a a p2;
       case mptr of
         Just ptr -> do {
@@ -282,17 +191,17 @@ mergePointers'' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
         }
         Nothing -> return Nothing
     }
-    (VVAPPL x y _, VVAPPL x' y' _) -> do {
+    (VVAPPL x y, VVAPPL x' y') -> do {
           px <- mergePointers' x x x';
           py <- mergePointers' y y y';
           case do {rx <- px; ry <- py; return $ VVAPPL rx ry} of
-            --Just apl -> Just <$> newPVT apl True --would create a new term. WARNING! Recursion lock might not work here
-            Just apl -> do {putPVT p1 $ apl; putPVT p2 $ apl; return $ Just p1}
+            --Just apl -> Just <$> new apl --would create a new term. WARNING! Recursion lock might not work here
+            Just apl -> do {put p1 $ apl; put p2 $ apl; return $ Just p1}
             Nothing -> return Nothing
         }
-    (UNAS _, UNAS _) -> return $ Just mainptr;--WARNING! --Just <$> newPVT UNAS True;
-    (UNAS _, t ) -> return $ Just p2; --WARNING! not sure if that gives the right behaviour
-    (t , UNAS _) -> return $ Just p1;
+    (UNAS, UNAS) -> return $ Just mainptr;--WARNING! --Just <$> newPVT UNAS True;
+    (UNAS, t ) -> return $ Just p2; --WARNING! not sure if that gives the right behaviour
+    (t , UNAS) -> return $ Just p1;
     (x,y) -> return Nothing
 }
 
