@@ -12,6 +12,7 @@ import Safe
 import Control.Monad.Fail
 import qualified Control.Monad.State.Lazy as S (get,put)
 import Control.Monad.State.Lazy  hiding (get,put)
+import Control.Monad.Trans.Writer.Lazy
 import Debug.Trace
 
 import Data.Char
@@ -53,10 +54,30 @@ rewireTo ptrnew newrefs pv = do {
     --other cases should not happen. Vars should only point to other vars
 }
 
+newVar::(VarMonad m v) => PVarTerm v a -> m (PVarTerm v a)
+newVar con = do {
+  var <- new $ VVAR con [];
+  put var (VVAR con [var]);
+  return var
+}
+
 termVars::Term a -> [a]
 termVars TBOT = []
 termVars (CONT a) = [a]
 termVars (APPL x y) = (termVars x) ++ (termVars y)
+
+
+pVarTermVars::(VarMonad m v) => PVarTerm v a -> m [PVarTerm v a]
+pVarTermVars ptr = execWriterT $ pVarTermVars' ptr
+
+pVarTermVars'::(VarMonad m v) => PVarTerm v a -> WriterT [PVarTerm v a] m ()
+pVarTermVars' ptr = do {t <- lift $ get ptr;
+  case t of
+    (VVAR _ _) -> tell [ptr] >> return ();
+    (VVAPPL x y) -> (pVarTermVars' x) >> (pVarTermVars' y)
+    x -> return ();
+}
+
 
 --needs terminal pointer so be set correctly already
 termToVTerm::(VarMonad m v) => (a -> v a) -> Term a -> m (PVTerm v a)
@@ -84,8 +105,7 @@ shalEqVarPtrs bound term = (zip vars) <$> sequence varms
   where vars = nub $ termVars term
         varms = (\x -> if bound x then new x >>= \v -> new (VVATOM v) else do{
                           udf <- new UNAS;
-                          var <- new $ VVAR udf [];
-                          put var $ VVAR udf [var]; --make sure it points to itself for rewireing
+                          var <- newVar udf;
                           return var;
                         }) <$> vars
 
@@ -121,6 +141,38 @@ nextVar = do {
     x -> error "no more variables to take from!" --weirdly needs to be here...
 }
 
+zipVars::(Monad m) => [b] -> VarT a m [(b,a)]
+zipVars [] = return []
+zipVars (x:xs) = do {v <- nextVar; vs <- zipVars xs; return $ (x,v):vs}
+
+pVarTermToShallowAssignments::(VarMonad m v, Eq (PVarTerm v a)) => PVarTerm v a -> VarT a m [(a, Term a)]
+pVarTermToShallowAssignments ptr = do {
+  asm <- pVarTermToAssignments ptr;
+  vars <- lift $ pVarTermVars ptr;
+  varnames <- return $ (\x -> lookupJust x asm) <$> vars;
+  (zip varnames) <$> (sequence $ pVarTermToShallowTerm asm <$> vars)
+}
+
+pVarTermToShallowTerm::(VarMonad m v, Eq (PVarTerm v a)) => [(PVarTerm v a, a)] -> PVarTerm v a -> VarT a m (Term a)
+pVarTermToShallowTerm asm ptr = do {
+  t <- lift $ get ptr;
+  case t of
+    UNAS -> CONT <$> nextVar
+    VVBOT -> return TBOT
+    (VVATOM x) -> CONT <$> lift (get x)
+    (VVAR _ _) -> return $ CONT (lookupJust ptr asm)
+    (VVAPPL x y) -> do {
+      x' <- pVarTermToShallowTerm asm x;
+      y' <- pVarTermToShallowTerm asm y;
+      return $ APPL x' y'
+    }
+}
+
+pVarTermToAssignments::(VarMonad m v) => PVarTerm v a -> VarT a m [(PVarTerm v a, a)]
+pVarTermToAssignments ptr = do {
+  termVars <- lift $ pVarTermVars ptr;
+  zipVars termVars
+}
 
 pVarTermToTerm::(VarMonad m v) => [a] -> PVarTerm v a -> m (Term a)
 pVarTermToTerm vars term = get term >>= varTermToTerm vars
