@@ -78,6 +78,18 @@ pVarTermVars' ptr = do {t <- lift $ get ptr;
     x -> return ();
 }
 
+--variable equivalency class to assignment
+pVarTermVarAsm::(VarMonad m v) => PVarTerm v a -> m [([PVarTerm v a], PVarTerm v a)]
+pVarTermVarAsm ptr = execWriterT $ pVarTermVarAsm' ptr
+
+pVarTermVarAsm'::(VarMonad m v) => PVarTerm v a -> WriterT [([PVarTerm v a], PVarTerm v a)] m ()
+pVarTermVarAsm' ptr = do {t <- lift $ get ptr;
+  case t of
+    (VVAR a lst) -> tell [(lst, a)] >> return ();
+    (VVAPPL x y) -> (pVarTermVarAsm' x) >> (pVarTermVarAsm' y)
+    x -> return ();
+}
+
 
 --needs terminal pointer so be set correctly already
 termToVTerm::(VarMonad m v) => (a -> v a) -> Term a -> m (PVTerm v a)
@@ -145,12 +157,17 @@ zipVars::(Monad m) => [b] -> VarT a m [(b,a)]
 zipVars [] = return []
 zipVars (x:xs) = do {v <- nextVar; vs <- zipVars xs; return $ (x,v):vs}
 
-pVarTermToShallowAssignments::(VarMonad m v, Eq (PVarTerm v a)) => PVarTerm v a -> VarT a m [(a, Term a)]
-pVarTermToShallowAssignments ptr = do {
+pVarTermToShallowAssignments::(VarMonad m v, Eq (PVarTerm v a)) => [a] -> PVarTerm v a -> m (Term a, [([a], Term a)])
+pVarTermToShallowAssignments vars ptr = evalStateT (pVarTermToShallowAssignments' ptr) vars
+
+pVarTermToShallowAssignments'::(VarMonad m v, Eq (PVarTerm v a)) => PVarTerm v a -> VarT a m (Term a, [([a], Term a)])
+pVarTermToShallowAssignments' ptr = do {
   asm <- pVarTermToAssignments ptr;
-  vars <- lift $ pVarTermVars ptr;
-  varnames <- return $ (\x -> lookupJust x asm) <$> vars;
-  (zip varnames) <$> (sequence $ pVarTermToShallowTerm asm <$> vars)
+  varCnts <- lift $ pVarTermVarAsm ptr;
+  namesToTerms <- return $ (\(vs, t) -> ((\x -> lookupJust x asm) <$> vs, pVarTermToShallowTerm asm t)) <$> varCnts;
+  lst <- (zip (fst <$> namesToTerms)) <$> (sequence $ (map snd namesToTerms));
+  orig <- pVarTermToShallowTerm asm ptr;
+  return (orig, lst);
 }
 
 pVarTermToShallowTerm::(VarMonad m v, Eq (PVarTerm v a)) => [(PVarTerm v a, a)] -> PVarTerm v a -> VarT a m (Term a)
@@ -160,7 +177,7 @@ pVarTermToShallowTerm asm ptr = do {
     UNAS -> CONT <$> nextVar
     VVBOT -> return TBOT
     (VVATOM x) -> CONT <$> lift (get x)
-    (VVAR _ _) -> return $ CONT (lookupJust ptr asm)
+    (VVAR _ _) -> return $ CONT (lookupJust ptr asm) --TODO: This does not evaluate the variable (but would be necessary once)
     (VVAPPL x y) -> do {
       x' <- pVarTermToShallowTerm asm x;
       y' <- pVarTermToShallowTerm asm y;

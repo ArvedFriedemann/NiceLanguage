@@ -7,6 +7,7 @@ import Control.Monad.Trans.Writer.Lazy
 import Control.Monad.Var
 import Data.IORef
 import Debug.Trace
+import Data.List
 
 forbiddenSymb = "() \t\n`"
 spaceChars = " \t"
@@ -82,6 +83,22 @@ stdUnify s1 s2 = do {
   mptm <- mergePointers pt1 pt2;
   case mptm of
     Just ptm -> putStrLn =<< showPVarTerm ptm
+    Nothing -> putStrLn "No match."
+}
+
+stdShallowUnify::String -> String -> IO ()
+stdShallowUnify s1 s2 = do {
+  (VVAPPL pt1 pt2) <- get =<< (ioifyPVarTerm $ termToVarTerm stdBound (APPL (rt s1) (rt s2)) );
+  mptm <- mergePointers pt1 pt2;
+  case mptm of
+    Just ptm -> do {
+      (orig, asm) <- pVarTermToShallowAssignments stdVars ptm;
+      putStrLn $ wt orig;
+      showASM <- return $ \(x,t) -> (intercalate "," x) ++ " = " ++ (wt t);
+      strs <- return $ showASM <$> asm;
+      sequence $ putStrLn <$> strs;
+      return ()
+    }
     Nothing -> putStrLn "No match."
 }
 
