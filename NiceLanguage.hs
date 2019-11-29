@@ -16,6 +16,7 @@ import Control.Monad.Trans.Writer.Lazy
 import Debug.Trace
 
 import Data.Char
+import Data.Maybe
 import Data.IORef
 
 getS::(Monad m) => StateT a m a
@@ -164,7 +165,7 @@ pVarTermToShallowAssignments'::(VarMonad m v, Eq (PVarTerm v a)) => PVarTerm v a
 pVarTermToShallowAssignments' ptr = do {
   asm <- pVarTermToAssignments ptr;
   varCnts <- lift $ pVarTermVarAsm ptr;
-  namesToTerms <- return $ (\(vs, t) -> ((\x -> lookupJust x asm) <$> vs, pVarTermToShallowTerm asm t)) <$> varCnts;
+  namesToTerms <- return $ (\(vs, t) -> (catMaybes $ (\x -> lookup x asm) <$> (nub vs), pVarTermToShallowTerm asm t)) <$> varCnts;
   lst <- (zip (fst <$> namesToTerms)) <$> (sequence $ (map snd namesToTerms));
   orig <- pVarTermToShallowTerm asm ptr;
   return (orig, lst);
