@@ -55,6 +55,12 @@ rewireTo ptrnew newrefs pv = do {
     --other cases should not happen. Vars should only point to other vars
 }
 
+getVarCnts::(VarMonad m v) => PVarTerm v a -> m (PVarTerm v a)
+getVarCnts var = do {
+  (VVAR a lst) <- get var;
+  return a
+}
+
 newVar::(VarMonad m v) => PVarTerm v a -> m (PVarTerm v a)
 newVar con = do {
   var <- new $ VVAR con [];
@@ -231,7 +237,7 @@ mergePointers::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a
 mergePointers p1 p2 = mergePointers' p1 p1 p2
 
 mergePointers'::(VarMonad m v, Eq (PVarTerm v a), Eq (v a), Eq a) => PVarTerm v a -> PVarTerm v a -> PVarTerm v a -> m (Maybe (PVarTerm v a))
---throughout this algorithm, both terms are made euqal (so they actually change). The first term is assumed to be
+--throughout this algorithm, both terms are made equal (so they actually change). The first term is assumed to be
 --the main one and returned as the merged term.
 mergePointers' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
   (t1,t2) <- get2 p1 p2;
