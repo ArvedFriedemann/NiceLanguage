@@ -30,6 +30,15 @@ newlAssocListRev (x:xs) = do {
   new $ VVAPPL lst x;
 }
 
+
+{-
+General idea:
+memory changes trigger updates
+when executing program, function trace preserved
+every operation has a reverse for backtracking or is operated on separate memory.
+-}
+
+--TODO: equality constraints constantly doubled for DAGs. existence only checked from root constraint down, never the other way around
 --BIG TODO: universal queue for new constraints (or old reactivated ones)
 --Maybe equality always needs to be conditional?
 evalEqConstr::(VarMonad m v, Eq (PVarTerm v a)) => PVarTerm v a -> m ()
@@ -37,29 +46,62 @@ evalEqConstr constr = do {
   lst <- lAssocListMatch constr
   case lst of
     [pt1,pt2,respt, con1, con2, prev1, prev2] -> do { --two additional constraints. Also: TODO: previous state missing (would be the previous var pointers. Problem: the list of references should be updated, but now equalities could have been forged)
-      res <- getVarCnts respt;
+      [res,t1,t2] <- sequence $ getVarCnts <$> [rept,pt1, pt2];
       case res of
-        VVBOT -> --make sure the variables are separated again
-        x -> --check if things are still equal
-      [t1,t2] <- sequence $ getVarCnts <$> [pt1, pt2];
-      case (t1, t2) of
-        (VVBOT, VVBOT) -> updateVar res VVTOP --TODO! TOP needed!
-        (VVTOP, VVTOP) -> updateVar res VVTOP --TODO! TOP needed!
-        (ATOM a, ATOM b) | a==b -> updateVar res VVTOP
-                         | otherwise -> updateVar res VVBOT
-        (VVAR a lst1, VVAR b lst2) -> --TODO: The pointers need to be dynamically updated with the result of the equality!
-        (VVAR a lst, t) -> evalEqConstr a pt2 --swap
-        (t, VVAR a lst) -> evalEqConstr pt1 a --WARNING! For update, make sure variable indirection removed
-        (VVAPPL x x', VVAPPL y y') -> do { --TODO: make sure not to copy the constraint! Maybe follow up constraints?
-          [c1,c2] <- sequence $ getVarCnts <$> [con1, con2];
-          case (c1,c2) of
-            (UNAS, UNAS) -> --make new constraints. Give same result var.
-            (eq1, eq2) -> --put them back onto the stack for reevaluation (if necesary)
+        VVBOT -> do { --make sure the variables are separated again
+        case (t1,t2) of
+          (VVBOT,VVBOT) -> updateVar res VVTOP
+          (VVTOP,VVTOP) -> updateVar res VVTOP
+          (VVATOM a, VVATOM b)
+            | a==b -> updateVar res VVTOP
+            | otherwise -> return ()
+          (VVAR a lst, VVAR b lst) --clean up! Move the pointers back! make sure the subterms stay different!
+          (VVAR a lst, t) -> --move
+          (t, VVAR b lst) -> --I said, move!
+          (VVAPPL x x', VVAPPL y y') -> --as well, potentially create new equiv constraints
+          (UNAS,UNAS) -> return () --can't do anything here
+          (t,UNAS) -> return ()
+          (UNAS,t) -> return ()
+          x -> return ()
         }
-        (UNAS, UNAS) -> --no further ado. Constraint should be woken up by its parents
-        (UNAS, t) -> --new term?
-        (t, UNAS) ->
-        x -> updateVar res VVBOT
+        VVTOP ->  do{ --check if things are equal
+          case (t1,t2) of
+            (VVBOT,VVBOT) -> return ()
+            (VVTOP,VVTOP) -> return ()
+            (VVATOM a, VVATOM b)
+              | a==b -> return ()
+              | otherwise -> updateVar res VVBOT
+            (VVAR a lst, VVAR b lst)
+              | a==b -> return ()
+              | otherwise -> --potentially create new equiv constraint
+            (VVAR a lst, t) -> --move
+            (t, VVAR b lst) -> --I said, move!
+            (VVAPPL x x', VVAPPL y y') -> --as well, potentially create new equiv constraints
+            (UNAS,UNAS) -> return () --can't do anything here
+            (t,UNAS) -> --assign!
+            (UNAS,t) -> --assign!
+            x -> updateVar res VVBOT
+        }
+        UNAS -> do{ --only assign result, not variables!
+          case (t1,t2) of
+            (VVBOT,VVBOT) -> updateVar res VVTOP
+            (VVTOP,VVTOP) -> updateVar res VVTOP
+            (VVATOM a, VVATOM b)
+              | a==b -> updateVar res VVTOP
+              | otherwise -> updateVar res VVBOT
+            (VVAR a lst, VVAR b lst)
+              | a==b -> updateVar res VVTOP
+              | otherwise -> --potentially create new UNASSIGNED equiv constraint
+            (VVAR a lst, t) -> --move
+            (t, VVAR b lst) -> --I said, move!
+            (VVAPPL x x', VVAPPL y y') -> --as well, potentially create new UNASSIGNED equiv constraints
+            (UNAS,UNAS) -> return () --can't do anything here
+            (t,UNAS) -> return ()
+            (UNAS,t) -> return ()
+            x -> updateVar res VVBOT
+        }
+
+
     }
     x -> error "not an equality constraint!"
 }
