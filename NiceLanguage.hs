@@ -54,12 +54,13 @@ rewireTo ptrnew newrefs pv = do {
     (VVAR ptr lst) -> put pv $ VVAR ptrnew (lst ++ newrefs)
     --other cases should not happen. Vars should only point to other vars
 }
-
+{-
 getVarCnts::(VarMonad m v) => PVarTerm v a -> m (PVarTerm v a)
 getVarCnts var = do {
   (VVAR a lst) <- get var;
   return a
 }
+-}
 
 newVar::(VarMonad m v) => PVarTerm v a -> m (PVarTerm v a)
 newVar con = do {
@@ -282,6 +283,11 @@ mergePointers' mainptr p1 p2 = if p1==p2 then return $ Just p1 else do{
 }
 
 
+
+--TODO: Completely different constraint structure. Variables also point to their constraints, to get rid of doubles. Constraints also unify.
+-- TODO: let variables save their previous states
+
+
 -------------------------------------------------------
 --util
 -------------------------------------------------------
@@ -299,3 +305,6 @@ exchange::(Eq a) => a -> a -> a -> a
 exchange match ex y
   | match==y = ex
   | otherwise = y
+
+
+--TODO: write existential proofs!
